@@ -14,6 +14,8 @@ import java.util.Scanner;
  */
 public class Driver {
 
+    private static final String KEY_ID = "key1";
+
     /**
      * Basic entry point.
      * @param args Ignored.
@@ -44,6 +46,7 @@ public class Driver {
         final int portNumber = Integer.parseInt(scanner.nextLine());
 
         final UdpServer server = new UdpServer(portNumber);
+        server.addClientKey(KEY_ID, staticKey());
         server.setConfiguration(new DefaultUdpServerConfig());
         server.start();
 
@@ -73,6 +76,7 @@ public class Driver {
         final int portNumber = Integer.parseInt(scanner.nextLine());
 
         final UdpClient client = new UdpClient(hostName, portNumber);
+        client.setClientKey(KEY_ID, staticKey());
         client.setConfiguration(new DefaultUdpClientConfig());
         client.start();
 
@@ -86,5 +90,14 @@ public class Driver {
                 break;
             }
         }
+    }
+
+    /**
+     * Static key. Meant to test encryption, not real security.
+     *
+     * @return Key for encryption
+     */
+    private static byte[] staticKey() {
+        return new byte[]{0xb, 0x2d, 0x13, 0x3, 0x02, 0x22, 0x73, 0x23, 0x4a, 0x71, 0x56, 0x60, 0x67, 0x0a, 0x1f, 0x65};
     }
 }

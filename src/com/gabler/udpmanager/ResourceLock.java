@@ -44,8 +44,19 @@ public class ResourceLock<RESOURCE_TYPE> {
      * @param toRun Block to run
      */
     public synchronized void performRunInLock(Consumer<RESOURCE_TYPE> toRun) {
-        toRun.accept(waitForLock());
+        final RESOURCE_TYPE resource = waitForLock();
+        RuntimeException runtimeIssue = null;
+
+        try {
+            toRun.accept(resource);
+        } catch (RuntimeException throwable) {
+            runtimeIssue = throwable;
+        }
         releaseLock();
+
+        if (runtimeIssue != null) {
+            throw runtimeIssue;
+        }
     }
 
     /**
@@ -55,8 +66,22 @@ public class ResourceLock<RESOURCE_TYPE> {
      * @return Result of the block
      */
     public synchronized <RETURN_TYPE> RETURN_TYPE performRunInLock(Function<RESOURCE_TYPE, RETURN_TYPE> toRun) {
-        final RETURN_TYPE result = toRun.apply(waitForLock());
+        final RESOURCE_TYPE resource = waitForLock();
+        RuntimeException runtimeIssue = null;
+
+        RETURN_TYPE result = null;
+
+        try {
+            result = toRun.apply(resource);
+        } catch (RuntimeException throwable) {
+            runtimeIssue = throwable;
+        }
         releaseLock();
+
+        if (runtimeIssue != null) {
+            throw runtimeIssue;
+        }
+
         return result;
     }
 }

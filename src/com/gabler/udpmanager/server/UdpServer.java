@@ -3,6 +3,8 @@ package com.gabler.udpmanager.server;
 import com.gabler.udpmanager.LifeCycleState;
 import com.gabler.udpmanager.ResourceLock;
 import com.gabler.udpmanager.model.UdpRequest;
+import com.gabler.udpmanager.security.AesBytesToCiphertextTransformer;
+import com.gabler.udpmanager.security.AesCiphertextToBytesTransformer;
 
 import java.io.ByteArrayOutputStream;
 import java.io.ObjectOutputStream;
@@ -11,7 +13,10 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.SocketException;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Optional;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 
 /**
  * Abstraction for the management of a UDP socket acting as a server.
@@ -30,9 +35,12 @@ public class UdpServer {
     private IUdpServerConfiguration configuration;
     private volatile LifeCycleState lifecycleState;
 
+    private final BiFunction<byte[], byte[], byte[]> aesBytesToCiphertextTransformer;
+    private final BiFunction<byte[], byte[], byte[]> aesCipherTextToBytesTransformer;
     private final DatagramSocket socket;
     private final ArrayList<UdpServerListeningThread> listeningThreads;
     private final ResourceLock<ArrayList<ServerClientCallback>> clientCallbacks;
+    private final ResourceLock<ServerKeyManager> keyManager;
 
     /**
      * Initialize an abstraction
@@ -41,10 +49,31 @@ public class UdpServer {
      * @throws SocketException If the port cannot be used
      */
     public UdpServer(int portNumber) throws SocketException {
+        this(
+            portNumber,
+            new AesBytesToCiphertextTransformer(),
+            new AesCiphertextToBytesTransformer()
+        );
+    }
+
+    /**
+     * Initialize an abstraction
+     *
+     * @param portNumber The server's port
+     * @param anAesBytesToCiphertextTransformer Encryption manager
+     * @param anAesCiphertextToBytesTransformer Decryption manager
+     * @throws SocketException If the port cannot be used
+     */
+    public UdpServer(
+        int portNumber,
+        BiFunction<byte[], byte[], byte[]> anAesBytesToCiphertextTransformer,
+        BiFunction<byte[], byte[], byte[]> anAesCiphertextToBytesTransformer
+    ) throws SocketException {
         this.lifecycleState = LifeCycleState.INITIALIZED;
         socket = new DatagramSocket(portNumber);
         listeningThreads = new ArrayList<>();
         clientCallbacks = new ResourceLock<>(new ArrayList<>());
+        keyManager = new ResourceLock<>(new ServerKeyManager());
 
         /*
          * It is possible for multiple threads to receive from the same DatagramSocket, but only one of them will get
@@ -53,6 +82,22 @@ public class UdpServer {
         for (int counter = 0; THREAD_POOL_SIZE > counter; counter++) {
             listeningThreads.add(new UdpServerListeningThread(this, socket));
         }
+
+        aesBytesToCiphertextTransformer = anAesBytesToCiphertextTransformer;
+        aesCipherTextToBytesTransformer = anAesCiphertextToBytesTransformer;
+    }
+
+    /**
+     * Add an identifier on the for a cryptographic key used to encrypt payloads.
+     *
+     * It is recommended to cycle the keys every now and then since IV is not used.
+     *
+     * @param id The key id
+     */
+    public synchronized void addClientKey(String id, byte[] key) {
+        keyManager.performRunInLock(manager -> {
+            manager.addKey(id, key);
+        });
     }
 
     /**
@@ -145,15 +190,36 @@ public class UdpServer {
                 callback.setKeyId(request.getKeyId());
                 clients.add(callback);
             }
+
+            /*
+             * It is recommended to cycle the keys every now and then since IV is not used.
+             * Therefore, if the client requests a new key be used, so be it.
+             */
             callback.setKeyId(request.getKeyId());
             return callback;
         });
 
         // We know which client sent the request, now let's have the configuration handle it.
         if (request.getPayloadType() == UdpRequest.PAYLOAD_TYPE_BYTES) {
-            configuration.handleBytesMessage(request.getBytePayload(), sender);
+            if (sender.getKeyId() != null) {
+                keyManager.performRunInLock(manager -> {
+                    final byte[] plainText = aesCipherTextToBytesTransformer.apply(request.getBytePayload(), manager.keyForId(sender.getKeyId()));
+                    configuration.handleBytesMessage(plainText, sender);
+                });
+            } else {
+                configuration.handleBytesMessage(request.getBytePayload(), sender);
+            }
         } else {
-            configuration.handleStringMessage(request.getStringPayload(), sender);
+            if (sender.getKeyId() != null) {
+                keyManager.performRunInLock(manager -> {
+                    final byte[] cipherText = Base64.getDecoder().decode(request.getStringPayload());
+                    final byte[] plainTextBytes = aesCipherTextToBytesTransformer.apply(cipherText, manager.keyForId(sender.getKeyId()));
+                    final String plainText = new String(plainTextBytes);
+                    configuration.handleStringMessage(plainText, sender);
+                });
+            } else {
+                configuration.handleStringMessage(request.getStringPayload(), sender);
+            }
         }
     }
 
@@ -189,13 +255,21 @@ public class UdpServer {
             clients.forEach(client -> {
                 final UdpRequest request = new UdpRequest();
                 request.setKeyId(client.getKeyId());
-                request.setBytePayload(bytePayload);
-                request.setStringPayload(stringPayload);
 
-                if (stringPayload != null) {
-                    request.setPayloadType(UdpRequest.PAYLOAD_TYPE_STRING);
+                final byte[] clientKey = keyManager.performRunInLock((Function<ServerKeyManager, byte[]>) manager -> manager.keyForId(client.getKeyId()));
+                if (request.getKeyId() != null) {
+                    if (bytePayload != null) {
+                        final byte[] cipherText = aesBytesToCiphertextTransformer.apply(bytePayload, clientKey);
+                        request.setBytePayload(cipherText);
+                    } else if (stringPayload != null) {
+                        final byte[] stringAsBytes = stringPayload.getBytes();
+                        final byte[] cipherTextBytes = aesBytesToCiphertextTransformer.apply(stringAsBytes, clientKey);
+                        final String cipherText = Base64.getEncoder().encodeToString(cipherTextBytes);
+                        request.setStringPayload(cipherText);
+                    }
                 } else {
-                    request.setPayloadType(UdpRequest.PAYLOAD_TYPE_BYTES);
+                    request.setBytePayload(bytePayload);
+                    request.setStringPayload(stringPayload);
                 }
 
                 try {
