@@ -29,9 +29,15 @@ sourceSets {
     }
 }
 
+run {
+    standardInput = System.in
+}
+
 test {
     useJUnitPlatform()
 }
 
 mainClassName = 'com.gabler.udpmanager.app.Driver'
+
 applicationName = 'UDP Connection Manager'
+version = "0.2.0"
