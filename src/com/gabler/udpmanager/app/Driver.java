@@ -45,7 +45,7 @@ public class Driver {
         System.out.println("Enter port number.");
         final int portNumber = Integer.parseInt(scanner.nextLine());
 
-        final UdpServer server = new UdpServer(portNumber);
+        final UdpServer server = new UdpServer(portNumber, 30);
         server.addClientKey(KEY_ID, staticKey());
         server.setConfiguration(new DefaultUdpServerConfig());
         server.start();

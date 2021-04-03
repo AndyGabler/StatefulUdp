@@ -25,13 +25,6 @@ import java.util.function.Function;
  */
 public class UdpServer {
 
-    /*
-     * TODO
-     * Few considerations here, first off, this is Spring Boot's thread pool. This appropriate for games?
-     * Secondly, this could be a property of some kind?
-     */
-    private static final int THREAD_POOL_SIZE = 30;
-
     private IUdpServerConfiguration configuration;
     private volatile LifeCycleState lifecycleState;
 
@@ -46,11 +39,13 @@ public class UdpServer {
      * Initialize an abstraction
      *
      * @param portNumber The server's port
+     * @param threadPoolSize Amount of listener threads to spin off
      * @throws SocketException If the port cannot be used
      */
-    public UdpServer(int portNumber) throws SocketException {
+    public UdpServer(int portNumber, int threadPoolSize) throws SocketException {
         this(
             portNumber,
+            threadPoolSize,
             new AesBytesToCiphertextTransformer(),
             new AesCiphertextToBytesTransformer()
         );
@@ -60,12 +55,14 @@ public class UdpServer {
      * Initialize an abstraction
      *
      * @param portNumber The server's port
+     * @param threadPoolSize Amount of listener threads to spin off
      * @param anAesBytesToCiphertextTransformer Encryption manager
      * @param anAesCiphertextToBytesTransformer Decryption manager
      * @throws SocketException If the port cannot be used
      */
     public UdpServer(
         int portNumber,
+        int threadPoolSize,
         BiFunction<byte[], byte[], byte[]> anAesBytesToCiphertextTransformer,
         BiFunction<byte[], byte[], byte[]> anAesCiphertextToBytesTransformer
     ) throws SocketException {
@@ -79,8 +76,8 @@ public class UdpServer {
          * It is possible for multiple threads to receive from the same DatagramSocket, but only one of them will get
          * each packet. Create listening threads.
          */
-        for (int counter = 0; THREAD_POOL_SIZE > counter; counter++) {
-            listeningThreads.add(new UdpServerListeningThread(this, socket));
+        for (int counter = 0; threadPoolSize > counter; counter++) {
+            listeningThreads.add(new UdpServerListeningThread(this, socket, counter));
         }
 
         aesBytesToCiphertextTransformer = anAesBytesToCiphertextTransformer;
@@ -283,9 +280,7 @@ public class UdpServer {
                     final DatagramPacket packet = new DatagramPacket(payload, payload.length, client.getAddress(), client.getPortNumber());
                     socket.send(packet);
                 } catch (Exception exception) {
-                    // TODO
-                    System.out.println("broadcast failed");
-                    System.out.println(exception);
+                    throw new RuntimeException(exception);
                 }
             });
         });

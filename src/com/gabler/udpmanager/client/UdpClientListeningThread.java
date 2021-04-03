@@ -7,6 +7,8 @@ import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.util.function.Function;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * Listening thread for a client. Listens for messages from the server and posts them back to the client.
@@ -14,6 +16,8 @@ import java.util.function.Function;
  * @author Andy Gabler
  */
 public class UdpClientListeningThread extends Thread {
+
+    private static final Logger LOGGER = Logger.getLogger("UdpClientListeningThread");
 
     private final Function<byte[], UdpRequest> bytesToUdpRequestTransformer;
 
@@ -67,6 +71,7 @@ public class UdpClientListeningThread extends Thread {
     }
 
     public void run() {
+        LOGGER.info("Listening thread for messages coming back from server started on " + socket.getLocalAddress() + "(" + socket.getLocalPort() + ").");
         while (!terminated) {
 
             if (!listening) {
@@ -78,24 +83,29 @@ public class UdpClientListeningThread extends Thread {
             try {
                 socket.receive(receivedPacket);
             } catch (IOException exception) {
-                // TODO
-                System.out.println("IO on socket receive.");
+                // Common exit case on closure
+                LOGGER.log(Level.SEVERE, "IO exception on socket receive.", exception);
                 continue;
             }
 
+            LOGGER.fine("Packet received from server.");
             UdpRequest request;
             try {
                 request = bytesToUdpRequestTransformer.apply(buffer);
-            } catch (RuntimeException e) {
-                // TODO
-                System.out.println(e);
-                System.out.println("RQ transform failed");
+            } catch (RuntimeException exception) {
+                // Post back to this port failed
+                LOGGER.log(Level.SEVERE, "Could not serialize bytes message to UdpRequest.", exception);
                 continue;
             }
 
             if (request != null) {
-                client.handleMessageFromServer(request);
+                try {
+                    client.handleMessageFromServer(request);
+                } catch (Exception exception) {
+                    LOGGER.log(Level.SEVERE, "Failed to handle UDP request.", exception);
+                }
             }
         }
+        LOGGER.info("Client listener terminated.");
     }
 }
