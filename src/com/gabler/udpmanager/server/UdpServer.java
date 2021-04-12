@@ -226,7 +226,7 @@ public class UdpServer {
      * @param payload The message
      */
     public void clientBroadcast(String payload) {
-        doBroadcast(payload, null);
+        doBroadcast(payload, null, UdpRequest.PAYLOAD_TYPE_STRING);
     }
 
     /**
@@ -235,7 +235,7 @@ public class UdpServer {
      * @param payload The message
      */
     public void clientBroadcast(byte[] payload) {
-        doBroadcast(null, payload);
+        doBroadcast(null, payload, UdpRequest.PAYLOAD_TYPE_BYTES);
     }
 
     /**
@@ -243,8 +243,9 @@ public class UdpServer {
      *
      * @param stringPayload Payload in a string format
      * @param bytePayload Payload in a bytes format
+     * @param payloadType The type of payload
      */
-    private synchronized void doBroadcast(String stringPayload, byte[] bytePayload) {
+    private synchronized void doBroadcast(String stringPayload, byte[] bytePayload, int payloadType) {
         checkLifeCycleMatureEnough(LifeCycleState.STARTED);
         checkLifeCycleTooMature(LifeCycleState.STARTED);
 
@@ -268,6 +269,7 @@ public class UdpServer {
                     request.setBytePayload(bytePayload);
                     request.setStringPayload(stringPayload);
                 }
+                request.setPayloadType(payloadType);
 
                 try {
                     final ByteArrayOutputStream byteStream = new ByteArrayOutputStream();
