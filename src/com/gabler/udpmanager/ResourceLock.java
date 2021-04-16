@@ -25,7 +25,7 @@ public class ResourceLock<RESOURCE_TYPE> {
      */
     public synchronized RESOURCE_TYPE waitForLock() {
         while (locked) {
-
+            Thread.onSpinWait();
         }
         locked = true;
         return resource;

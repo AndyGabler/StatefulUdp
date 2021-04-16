@@ -40,4 +40,4 @@ test {
 mainClassName = 'com.gabler.udpmanager.app.Driver'
 
 applicationName = 'UDP Connection Manager'
-version = "1.0.1"
+version = "1.0.2"
