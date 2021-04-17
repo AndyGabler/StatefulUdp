@@ -1,7 +1,6 @@
 package com.gabler.udpmanager.server;
 
 import com.gabler.udpmanager.LifeCycleState;
-import com.gabler.udpmanager.ResourceLock;
 import com.gabler.udpmanager.model.UdpRequest;
 import com.gabler.udpmanager.security.AesBytesToCiphertextTransformer;
 import com.gabler.udpmanager.security.AesCiphertextToBytesTransformer;
@@ -14,9 +13,7 @@ import java.net.InetAddress;
 import java.net.SocketException;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.util.Optional;
 import java.util.function.BiFunction;
-import java.util.function.Function;
 
 /**
  * Abstraction for the management of a UDP socket acting as a server.
@@ -32,8 +29,8 @@ public class UdpServer {
     private final BiFunction<byte[], byte[], byte[]> aesCipherTextToBytesTransformer;
     private final DatagramSocket socket;
     private final ArrayList<UdpServerListeningThread> listeningThreads;
-    private final ResourceLock<ArrayList<ServerClientCallback>> clientCallbacks;
-    private final ResourceLock<ServerKeyManager> keyManager;
+    private final ServerClientManager clientManager;
+    private final ServerKeyManager keyManager;
 
     /**
      * Initialize an abstraction
@@ -69,8 +66,8 @@ public class UdpServer {
         this.lifecycleState = LifeCycleState.INITIALIZED;
         socket = new DatagramSocket(portNumber);
         listeningThreads = new ArrayList<>();
-        clientCallbacks = new ResourceLock<>(new ArrayList<>());
-        keyManager = new ResourceLock<>(new ServerKeyManager());
+        clientManager = new ServerClientManager();
+        keyManager = new ServerKeyManager();
 
         /*
          * It is possible for multiple threads to receive from the same DatagramSocket, but only one of them will get
@@ -91,10 +88,8 @@ public class UdpServer {
      *
      * @param id The key id
      */
-    public synchronized void addClientKey(String id, byte[] key) {
-        keyManager.performRunInLock(manager -> {
-            manager.addKey(id, key);
-        });
+    public void addClientKey(String id, byte[] key) {
+        keyManager.addKey(id, key);
     }
 
     /**
@@ -167,53 +162,29 @@ public class UdpServer {
      * @param clientAddress The address of the client who sent the request
      * @param clientPort The port to post back to the client
      */
-    public synchronized void handleMessageFromClient(UdpRequest request, InetAddress clientAddress, int clientPort) {
+    public void handleMessageFromClient(UdpRequest request, InetAddress clientAddress, int clientPort) {
         checkLifeCycleMatureEnough(LifeCycleState.STARTED);
         checkLifeCycleTooMature(LifeCycleState.STARTED);
 
         // First, check and ensure we do not have a matching client
-        final ServerClientCallback sender = clientCallbacks.performRunInLock(clients -> {
-            final Optional<ServerClientCallback> callbackOptional = clients.stream().filter(client ->
-                client.getAddress().equals(clientAddress) && clientPort == client.getPortNumber()
-            ).findFirst();
-
-            ServerClientCallback callback;
-            if (callbackOptional.isPresent()) {
-                callback = callbackOptional.get();
-            } else {
-                callback = new ServerClientCallback();
-                callback.setAddress(clientAddress);
-                callback.setPortNumber(clientPort);
-                callback.setKeyId(request.getKeyId());
-                clients.add(callback);
-            }
-
-            /*
-             * It is recommended to cycle the keys every now and then since IV is not used.
-             * Therefore, if the client requests a new key be used, so be it.
-             */
-            callback.setKeyId(request.getKeyId());
-            return callback;
-        });
+        final ServerClientCallback sender = clientManager.getForAddressAndPort(clientAddress, clientPort, request.getKeyId());
 
         // We know which client sent the request, now let's have the configuration handle it.
         if (request.getPayloadType() == UdpRequest.PAYLOAD_TYPE_BYTES) {
             if (sender.getKeyId() != null) {
-                keyManager.performRunInLock(manager -> {
-                    final byte[] plainText = aesCipherTextToBytesTransformer.apply(request.getBytePayload(), manager.keyForId(sender.getKeyId()));
-                    configuration.handleBytesMessage(plainText, sender);
-                });
+                final byte[] key = keyManager.keyForId(sender.getKeyId());
+                final byte[] plainText = aesCipherTextToBytesTransformer.apply(request.getBytePayload(), key);
+                configuration.handleBytesMessage(plainText, sender);
             } else {
                 configuration.handleBytesMessage(request.getBytePayload(), sender);
             }
         } else {
             if (sender.getKeyId() != null) {
-                keyManager.performRunInLock(manager -> {
-                    final byte[] cipherText = Base64.getDecoder().decode(request.getStringPayload());
-                    final byte[] plainTextBytes = aesCipherTextToBytesTransformer.apply(cipherText, manager.keyForId(sender.getKeyId()));
-                    final String plainText = new String(plainTextBytes);
-                    configuration.handleStringMessage(plainText, sender);
-                });
+                final byte[] key = keyManager.keyForId(sender.getKeyId());
+                 final byte[] cipherText = Base64.getDecoder().decode(request.getStringPayload());
+                 final byte[] plainTextBytes = aesCipherTextToBytesTransformer.apply(cipherText, key);
+                 final String plainText = new String(plainTextBytes);
+                configuration.handleStringMessage(plainText, sender);
             } else {
                 configuration.handleStringMessage(request.getStringPayload(), sender);
             }
@@ -245,47 +216,45 @@ public class UdpServer {
      * @param bytePayload Payload in a bytes format
      * @param payloadType The type of payload
      */
-    private synchronized void doBroadcast(String stringPayload, byte[] bytePayload, int payloadType) {
+    private void doBroadcast(String stringPayload, byte[] bytePayload, int payloadType) {
         checkLifeCycleMatureEnough(LifeCycleState.STARTED);
         checkLifeCycleTooMature(LifeCycleState.STARTED);
 
-        clientCallbacks.performRunInLock(clients -> {
-            clients.forEach(client -> {
-                final UdpRequest request = new UdpRequest();
-                request.setKeyId(client.getKeyId());
+        for (ServerClientCallback client : clientManager.getAll()) {
+            final UdpRequest request = new UdpRequest();
+            request.setKeyId(client.getKeyId());
 
-                final byte[] clientKey = keyManager.performRunInLock((Function<ServerKeyManager, byte[]>) manager -> manager.keyForId(client.getKeyId()));
-                if (request.getKeyId() != null) {
-                    if (bytePayload != null) {
-                        final byte[] cipherText = aesBytesToCiphertextTransformer.apply(bytePayload, clientKey);
-                        request.setBytePayload(cipherText);
-                    } else if (stringPayload != null) {
-                        final byte[] stringAsBytes = stringPayload.getBytes();
-                        final byte[] cipherTextBytes = aesBytesToCiphertextTransformer.apply(stringAsBytes, clientKey);
-                        final String cipherText = Base64.getEncoder().encodeToString(cipherTextBytes);
-                        request.setStringPayload(cipherText);
-                    }
-                } else {
-                    request.setBytePayload(bytePayload);
-                    request.setStringPayload(stringPayload);
+            final byte[] clientKey = keyManager.keyForId(client.getKeyId());
+            if (request.getKeyId() != null) {
+                if (bytePayload != null) {
+                    final byte[] cipherText = aesBytesToCiphertextTransformer.apply(bytePayload, clientKey);
+                    request.setBytePayload(cipherText);
+                } else if (stringPayload != null) {
+                    final byte[] stringAsBytes = stringPayload.getBytes();
+                    final byte[] cipherTextBytes = aesBytesToCiphertextTransformer.apply(stringAsBytes, clientKey);
+                    final String cipherText = Base64.getEncoder().encodeToString(cipherTextBytes);
+                    request.setStringPayload(cipherText);
                 }
-                request.setPayloadType(payloadType);
+            } else {
+                request.setBytePayload(bytePayload);
+                request.setStringPayload(stringPayload);
+            }
+            request.setPayloadType(payloadType);
 
-                try {
-                    final ByteArrayOutputStream byteStream = new ByteArrayOutputStream();
-                    final ObjectOutputStream outputStream = new ObjectOutputStream(byteStream);
-                    outputStream.writeObject(request);
+            try {
+                final ByteArrayOutputStream byteStream = new ByteArrayOutputStream();
+                final ObjectOutputStream outputStream = new ObjectOutputStream(byteStream);
+                outputStream.writeObject(request);
 
-                    final byte[] payload = byteStream.toByteArray();
-                    byteStream.close();
+                final byte[] payload = byteStream.toByteArray();
+                byteStream.close();
 
-                    final DatagramPacket packet = new DatagramPacket(payload, payload.length, client.getAddress(), client.getPortNumber());
-                    socket.send(packet);
-                } catch (Exception exception) {
-                    throw new RuntimeException(exception);
-                }
-            });
-        });
+                final DatagramPacket packet = new DatagramPacket(payload, payload.length, client.getAddress(), client.getPortNumber());
+                socket.send(packet);
+            } catch (Exception exception) {
+                throw new RuntimeException(exception);
+            }
+        }
     }
 
     /**

@@ -52,21 +52,21 @@ public class UdpClientListeningThread extends Thread {
     /**
      * Start listening to the socket.
      */
-    public synchronized void startListen() {
+    public void startListen() {
         listening = true;
     }
 
     /**
      * Stop listening to the socket.
      */
-    public synchronized void stopListen() {
+    public void stopListen() {
         listening = false;
     }
 
     /**
      * Kill the listener.
      */
-    public synchronized void killListener() {
+    public void killListener() {
         terminated = true;
     }
 
@@ -88,7 +88,6 @@ public class UdpClientListeningThread extends Thread {
                 continue;
             }
 
-            LOGGER.fine("Packet received from server.");
             UdpRequest request;
             try {
                 request = bytesToUdpRequestTransformer.apply(buffer);

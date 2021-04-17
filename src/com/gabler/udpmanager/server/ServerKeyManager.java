@@ -1,6 +1,6 @@
 package com.gabler.udpmanager.server;
 
-import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Key manager for a server.
@@ -9,7 +9,14 @@ import java.util.HashMap;
  */
 public class ServerKeyManager {
 
-    private HashMap<String, byte[]> keyMap = new HashMap<>();
+    /*
+     * Concurrent hash map of the keys.
+     * This has thread-safe reads with no locks.
+     * It has a write lock (which doesn't block reads!).
+     * The only consequence is if the key server is being overloaded with requests and completing them all at the same
+     * time.
+     */
+    private ConcurrentHashMap<String, byte[]> keyMap = new ConcurrentHashMap<>();
 
     /**
      * Add a key to the manager.

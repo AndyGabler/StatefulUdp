@@ -87,7 +87,7 @@ public class UdpClient {
      * @param id The key id
      * @param key The key to use
      */
-    public synchronized void setClientKey(String id, byte[] key) {
+    public void setClientKey(String id, byte[] key) {
         clientKey.performRunInLock(clientSideKey -> {
             clientSideKey.setKeyId(id);
             clientSideKey.setKeyBytes(key);
@@ -166,30 +166,28 @@ public class UdpClient {
      *
      * @param request The UDP request which contains a payload
      */
-    public synchronized void handleMessageFromServer(UdpRequest request) {
+    public void handleMessageFromServer(UdpRequest request) {
         checkLifeCycleMatureEnough(LifeCycleState.STARTED);
         checkLifeCycleTooMature(LifeCycleState.STARTED);
 
         if (request.getPayloadType() == UdpRequest.PAYLOAD_TYPE_BYTES) {
-            clientKey.performRunInLock(key -> {
-                if (key.getKeyBytes() != null) {
-                    final byte[] plainText = aesCipherTextToBytesTransformer.apply(request.getBytePayload(), key.getKeyBytes());
-                    configuration.handleBytesMessage(plainText);
-                } else {
-                    configuration.handleBytesMessage(request.getBytePayload());
-                }
-            });
+            final byte[] key = clientKey.performRunInLock(ClientKey::getKeyBytes);
+            if (key != null) {
+                final byte[] plainText = aesCipherTextToBytesTransformer.apply(request.getBytePayload(), key);
+                configuration.handleBytesMessage(plainText);
+            } else {
+                configuration.handleBytesMessage(request.getBytePayload());
+            }
         } else {
-            clientKey.performRunInLock(key -> {
-                if (key.getKeyBytes() != null) {
-                    final byte[] cipherText = Base64.getDecoder().decode(request.getStringPayload());
-                    final byte[] plainTextBytes = aesCipherTextToBytesTransformer.apply(cipherText, key.getKeyBytes());
-                    final String plainText = new String(plainTextBytes);
-                    configuration.handleStringMessage(plainText);
-                } else {
-                    configuration.handleStringMessage(request.getStringPayload());
-                }
-            });
+            final byte[] key = clientKey.performRunInLock(ClientKey::getKeyBytes);
+            if (key != null) {
+                final byte[] cipherText = Base64.getDecoder().decode(request.getStringPayload());
+                final byte[] plainTextBytes = aesCipherTextToBytesTransformer.apply(cipherText, key);
+                final String plainText = new String(plainTextBytes);
+                configuration.handleStringMessage(plainText);
+            } else {
+                configuration.handleStringMessage(request.getStringPayload());
+            }
         }
     }
 
@@ -220,7 +218,7 @@ public class UdpClient {
      * @param bytePayload Payload in a bytes format
      * @throws IOException If the send fails
      */
-    private synchronized void sendToServer(String stringPayload, byte[] bytePayload) throws IOException {
+    private void sendToServer(String stringPayload, byte[] bytePayload) throws IOException {
         checkLifeCycleMatureEnough(LifeCycleState.STARTED);
         checkLifeCycleTooMature(LifeCycleState.STARTED);
 

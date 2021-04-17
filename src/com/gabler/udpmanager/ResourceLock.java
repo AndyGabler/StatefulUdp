@@ -23,12 +23,21 @@ public class ResourceLock<RESOURCE_TYPE> {
      *
      * @return The resource
      */
-    public synchronized RESOURCE_TYPE waitForLock() {
-        while (locked) {
+    public RESOURCE_TYPE waitForLock() {
+        while (isLocked()) {
             Thread.onSpinWait();
         }
         locked = true;
         return resource;
+    }
+
+    /**
+     * Synchronized getter on the lock incase a method caches the value.
+     *
+     * @return True if locked
+     */
+    private synchronized boolean isLocked() {
+        return locked;
     }
 
     /**
@@ -43,7 +52,7 @@ public class ResourceLock<RESOURCE_TYPE> {
      *
      * @param toRun Block to run
      */
-    public synchronized void performRunInLock(Consumer<RESOURCE_TYPE> toRun) {
+    public void performRunInLock(Consumer<RESOURCE_TYPE> toRun) {
         final RESOURCE_TYPE resource = waitForLock();
         RuntimeException runtimeIssue = null;
 
@@ -65,7 +74,7 @@ public class ResourceLock<RESOURCE_TYPE> {
      * @param toRun Block to run
      * @return Result of the block
      */
-    public synchronized <RETURN_TYPE> RETURN_TYPE performRunInLock(Function<RESOURCE_TYPE, RETURN_TYPE> toRun) {
+    public <RETURN_TYPE> RETURN_TYPE performRunInLock(Function<RESOURCE_TYPE, RETURN_TYPE> toRun) {
         final RESOURCE_TYPE resource = waitForLock();
         RuntimeException runtimeIssue = null;
 
